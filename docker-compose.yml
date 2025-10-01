@@ -1,0 +1,76 @@
+
+version: "3.8"
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports: ["6333:6333", "6334:6334"]
+    volumes: [ "qdrant_storage:/qdrant/storage" ]
+    environment: { QDRANT__SERVICE__GRPC_PORT: 6334 }
+
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - plugins.security.disabled=true
+    ulimits: { memlock: { soft: -1, hard: -1 } }
+    ports: ["9200:9200", "9600:9600"]
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [ "minio_data:/data" ]
+
+  mc:
+    image: quay.io/minio/mc:RELEASE.2024-09-16T17-43-14Z
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb -p local/tus || true;
+      tail -f /dev/null
+      "
+
+  tusd:
+    image: tusproject/tusd:v1.13.0
+    command: >
+      -host 0.0.0.0
+      -port 1080
+      -s3-bucket tus
+      -s3-endpoint http://minio:9000
+      -s3-access-key-id minioadmin
+      -s3-secret-access-key minioadmin
+      -s3-disable-ssl
+      -s3-object-prefix uploads/
+    depends_on: [minio, mc]
+    ports: ["1080:1080"]
+
+  server:
+    build: ./server
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - OPENSEARCH_URL=http://opensearch:9200
+      - EMBED_MODEL=BAAI/bge-large-en-v1.5
+      - RERANKER_MODEL=BAAI/bge-reranker-large
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - S3_REGION=us-east-1
+      - S3_BUCKET=tus
+      - S3_USE_SSL=false
+      - REQUIRE_API_KEY=false
+      - LIMIT_SEARCH_PER_MINUTE=120
+      - EMBED_CACHE_SIZE=10000
+      - SEARCH_CACHE_TTL_S=30
+    depends_on: [qdrant, opensearch, minio, tusd]
+    ports: ["8000:8000"]
+
+volumes:
+  qdrant_storage:
+  minio_data:
