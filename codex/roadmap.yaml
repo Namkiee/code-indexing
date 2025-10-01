@@ -41,6 +41,7 @@ tasks:
     dependencies: []
     labels: ["DI","models","testable"]
     estimate: "2d"
+    status: completed
 
   - id: A6
     area: architecture
@@ -115,6 +116,7 @@ tasks:
     dependencies: ["A1"]
     labels: ["DI","resilience","extensibility"]
     estimate: "1.5d"
+    status: completed
 
   - id: A3
     area: architecture

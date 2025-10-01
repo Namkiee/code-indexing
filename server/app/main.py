@@ -1,26 +1,59 @@
 
+import logging
+import time, uuid, threading, json, pathlib, os
+from collections import OrderedDict
+
 from fastapi import FastAPI, Request, Header, HTTPException
+
 from app.config import settings
-from app.models.schemas import UploadRequest, SearchRequest, SearchResponse, SearchHit, FetchLinesRequest, FetchLinesResponse, FeedbackRequest, FeedbackResponse
-from app.index.qdrant_store import QdrantStore
 from app.index.opensearch_store import OSStore
+from app.index.qdrant_store import QdrantStore
+from app.models.schemas import (
+    FetchLinesRequest,
+    FetchLinesResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    SearchHit,
+    SearchRequest,
+    SearchResponse,
+    UploadRequest,
+)
 from app.search.hybrid_search import HybridSearch
 from app.search.providers.embedding import build_embedding_provider
 from app.search.providers.reranker import build_reranker_provider
 from app.search.reranker import CrossEncoderReranker
+from app.utils.jsonl import append_jsonl
 from app.utils.s3_utils import get_object_text
 from app.utils.vault import get_current_salt
-from app.utils.jsonl import append_jsonl
 from qdrant_client.http.models import PointStruct
-import time, uuid, threading, json, pathlib, os
-from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Hybrid Code Indexing (Advanced)")
-embed_provider = build_embedding_provider(os.getenv("EMBED_PROVIDER"), settings.embed_model)
+
+embed_provider, embed_provider_key, embed_fallback = build_embedding_provider(
+    os.getenv("EMBED_PROVIDER"), settings.embed_model
+)
+if embed_fallback:
+    logger.warning(
+        "Unknown embedding provider '%s'; falling back to '%s'",
+        embed_fallback,
+        embed_provider_key,
+    )
+
 qdrant = QdrantStore()
 os_store = OSStore()
 searcher = HybridSearch(qdrant, os_store, embed_provider)
-reranker_provider = build_reranker_provider(os.getenv("RERANKER_PROVIDER"), settings.reranker_model)
+
+reranker_provider, reranker_key, reranker_fallback = build_reranker_provider(
+    os.getenv("RERANKER_PROVIDER"), settings.reranker_model
+)
+if reranker_fallback:
+    logger.warning(
+        "Unknown reranker provider '%s'; falling back to '%s'",
+        reranker_fallback,
+        reranker_key,
+    )
 reranker = CrossEncoderReranker(provider=reranker_provider)
 
 # --- RBAC / Rate limit / Cache / Metrics ---
