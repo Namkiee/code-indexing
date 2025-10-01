@@ -1,0 +1,428 @@
+# Codex Execution Roadmap
+schema_version: 1
+project: "Hybrid Code Indexing — Advanced"
+generated_at: "2025-10-01T07:54:32.300847Z"
+
+milestones:
+  - id: M1
+    name: "Quick wins (1-2 weeks)"
+  - id: M2
+    name: "Stabilize & Scale (3-5 weeks)"
+  - id: M3
+    name: "Enterprise & Extensibility (6+ weeks)"
+
+defaults:
+  owner: "core-team"
+  reviewers: ["search", "platform", "security"]
+  coding_guidelines: "Follow existing repo structure; add unit tests where feasible."
+
+tasks:
+  - id: A1
+    area: architecture
+    milestone: M1
+    priority: P1
+    type: refactor
+    title: "Introduce Embedding/CrossEncoder Provider pattern (DI)"
+    objective: "Enable model swap/multi-model without code changes; increase testability."
+    rationale: "Current code directly instantiates SentenceTransformer/CrossEncoder; hard to A/B or swap."
+    suggested_changes:
+      - "server/app/search/providers/embedding.py (new: EmbeddingProvider interface + HFEmbeddingProvider)"
+      - "server/app/search/providers/reranker.py (new: CrossEncoderProvider interface + HFCrossEncoderProvider)"
+      - "server/app/main.py (inject providers into HybridSearch and fetch-lines)"
+      - "tests/unit/test_providers.py (new)"
+    steps:
+      - "Define abstract classes: EmbeddingProvider.encode(texts), CrossEncoderProvider.rerank(query, passages)"
+      - "Wrap current models with provider implementations"
+      - "Wire providers via env vars (EMBED_PROVIDER, RERANKER_PROVIDER)"
+      - "Replace direct usages in main/search with providers"
+    acceptance:
+      - "ENV switch changes model without code modify"
+      - "Unit tests pass with mock providers"
+    dependencies: []
+    labels: ["DI","models","testable"]
+    estimate: "2d"
+
+  - id: A6
+    area: architecture
+    milestone: M1
+    priority: P1
+    type: infra
+    title: "Request-ID middleware & structured JSON logging"
+    objective: "Trace requests end-to-end and correlate search pipeline events."
+    rationale: "Hard to debug without stable correlation id; logs are unstructured."
+    suggested_changes:
+      - "server/app/middleware/request_id.py (new)"
+      - "server/app/utils/logging.py (new: JSON logger, levels, fields)"
+      - "server/app/main.py (register middleware + use logger)"
+    steps:
+      - "Inject/propagate x-request-id; generate if missing"
+      - "Log at INFO: query, tenant, repo, latency, variant, topK; at DEBUG: candidate ids/scores"
+      - "Ensure errors include code and request_id"
+    acceptance:
+      - "Every response includes x-request-id header"
+      - "Logs are JSON and can be filtered by request_id"
+    dependencies: []
+    labels: ["observability"]
+    estimate: "1.5d"
+
+  - id: A2
+    area: architecture
+    milestone: M2
+    priority: P1
+    type: infra
+    title: "Redis-based distributed cache and rate limiting"
+    objective: "Share cache/limits across multiple server replicas."
+    rationale: "Current in-memory caches/limits break under horizontal scaling."
+    suggested_changes:
+      - "docker-compose.yml (add redis service)"
+      - "server/app/utils/redis_client.py (new)"
+      - "server/app/main.py (embed/search cache -> Redis; token bucket using INCR/EXPIRE)"
+      - "docs/Operations.md (update)"
+    steps:
+      - "Introduce Redis client with retries and fallback to local when down"
+      - "Move embedding & search result caches into Redis TTL keys"
+      - "Implement rate-limit token bucket per api key/ip"
+    acceptance:
+      - "Two server instances share cache and limits"
+      - "If Redis is down, service continues with local fallback and warnings"
+    dependencies: ["A6"]
+    labels: ["scaling","cache","limits"]
+    estimate: "2d"
+
+  - id: A3
+    area: architecture
+    milestone: M2
+    priority: P1
+    type: feature
+    title: "Asynchronous indexing pipeline (queue + workers)"
+    objective: "Reliability and throughput for large uploads; retries/backoff."
+    rationale: "Synchronous indexing can timeout and lacks robust retries."
+    suggested_changes:
+      - "server/worker/worker.py (new: RQ or Celery worker)"
+      - "server/app/queue.py (new: enqueue helpers)"
+      - "server/app/main.py (enqueue jobs, return job_id/status endpoint)"
+      - "docker-compose.yml (worker + redis/rabbit)"
+      - "docs/Operations.md (operating the queue)"
+    steps:
+      - "Choose RQ (Redis) for simplicity; define jobs: embed_text, bulk_qdrant, bulk_opensearch"
+      - "Ensure idempotency via chunk_id; implement DLQ"
+      - "Add /v1/jobs/<id> status endpoint"
+    acceptance:
+      - "100k+ chunks enqueue and process without API timeouts"
+      - "Failures auto-retry with exponential backoff; DLQ visible"
+    dependencies: ["A2"]
+    labels: ["indexing","reliability"]
+    estimate: "4d"
+
+  - id: A4
+    area: architecture
+    milestone: M3
+    priority: P2
+    type: refactor
+    title: "Unify privacy ON/OFF schema with preview_key + range-fetch"
+    objective: "One response shape; optional preview retrieval via S3 range-read."
+    rationale: "Current branches complicate server/search logic."
+    suggested_changes:
+      - "server/app/models/schemas.py (add preview_key)"
+      - "server/app/utils/s3_utils.py (add range_read)"
+      - "server/app/main.py (/v1/search to always include anchor/snippet; /v1/search/fetch-lines uses range)"
+      - "docs/Design.md (update privacy flow)"
+    steps:
+      - "Always store rel_path/lang/line_* metadata"
+      - "For privacy=on, omit text, store preview_key"
+      - "Implement fetch-lines reading only the snippet around line range"
+    acceptance:
+      - "Client receives same schema regardless of privacy mode"
+      - "Privacy mode still avoids raw text persistence on server"
+    dependencies: ["A3"]
+    labels: ["privacy","consistency"]
+    estimate: "3d"
+
+  - id: A5
+    area: architecture
+    milestone: M3
+    priority: P2
+    type: infra
+    title: "Standardized retry utilities & partial-failure handling"
+    objective: "Handle transient errors for Qdrant/OpenSearch writes."
+    rationale: "Bulk writes can partially fail; need robust retry/backoff."
+    suggested_changes:
+      - "server/app/utils/retry.py (new)"
+      - "server/app/index/qdrant_store.py (wrap upserts)"
+      - "server/app/index/opensearch_store.py (wrap bulk)"
+      - "server/scripts/* (use retry for admin ops)"
+    steps:
+      - "Implement retry_with_backoff with jitter"
+      - "Split bulk into batches; log partial failures"
+    acceptance:
+      - "Network blips do not lose data; tests simulate failures"
+    dependencies: ["A3"]
+    labels: ["resilience"]
+    estimate: "2d"
+
+  - id: A7
+    area: architecture
+    milestone: M3
+    priority: P3
+    type: feature
+    title: "Pluggable ranking pipeline (DAG)"
+    objective: "Toggle/compose ranking stages without code edits."
+    rationale: "Accelerate experiments and safe rollouts."
+    suggested_changes:
+      - "server/app/search/pipeline.py (new: stage interfaces + DAG executor)"
+      - "config/pipeline.yaml (new)"
+      - "server/app/main.py (load pipeline config)"
+    steps:
+      - "Define stages: vector, bm25, rrf, learned, cross-enc"
+      - "Load pipeline config and execute dynamically"
+    acceptance:
+      - "RRF/learned stage can be turned on/off via config reload"
+    dependencies: ["A1"]
+    labels: ["experimentation"]
+    estimate: "3d"
+
+  - id: U1
+    area: user
+    milestone: M1
+    priority: P1
+    type: feature
+    title: "Highlights & line anchors in search results"
+    objective: "Explain why results match; enable jump-to-line."
+    rationale: "Improves CTR and trust."
+    suggested_changes:
+      - "server/app/search/snippets.py (new: compute highlights from OS or simple matcher)"
+      - "server/app/main.py (include anchor: rel_path:line_start-line_end)"
+      - "docs/API.md (document new fields)"
+    steps:
+      - "Use OpenSearch highlighter when available"
+      - "Fallback to keyword windowing around matched tokens"
+    acceptance:
+      - "Responses include snippet + anchor; privacy mode works via fetch-lines"
+    dependencies: ["A4"]
+    labels: ["ux","search"]
+    estimate: "2d"
+
+  - id: U2
+    area: user
+    milestone: M1
+    priority: P1
+    type: feature
+    title: "Error/status message standardization"
+    objective: "Self-serve troubleshooting and faster support."
+    rationale: "Current errors are vague."
+    suggested_changes:
+      - "server/app/errors.py (new: code registry IDX-*, SRCH-*)"
+      - "server/app/main.py (raise structured errors)"
+      - "docs/Troubleshooting.md (map codes to actions)"
+    steps:
+      - "Define error codes and templates"
+      - "Ensure every failure path maps to a code and remediation"
+    acceptance:
+      - "Each error includes code, message, request_id"
+    dependencies: ["A6"]
+    labels: ["ux","support"]
+    estimate: "1d"
+
+  - id: U3
+    area: user
+    milestone: M2
+    priority: P2
+    type: feature
+    title: "Expose A/B bucket & manual override"
+    objective: "Reproducibility and user control."
+    rationale: "Hidden bucket makes debugging hard."
+    suggested_changes:
+      - "server/app/main.py (accept variant override param)"
+      - "docs/API.md (document query param and response fields)"
+    steps:
+      - "Allow ?variant=control|exp and echo back in response"
+    acceptance:
+      - "Same query with same variant is stable; logs include variant"
+    dependencies: ["A6"]
+    labels: ["experimentation","ux"]
+    estimate: "0.5d"
+
+  - id: U4
+    area: user
+    milestone: M2
+    priority: P2
+    type: feature
+    title: "CLI quality-of-life: --config and guided suggestions"
+    objective: "Reduce friction for repeated indexing."
+    rationale: "Common flags should be reusable."
+    suggested_changes:
+      - "client/cli_index.py (load YAML config; suggest filters on failures)"
+      - "docs/Quickstart.md (examples)"
+    steps:
+      - "Support --config path; merge with CLI args"
+      - "On low recall, print suggestions (add lang/dir_hint)"
+    acceptance:
+      - "CLI runs from config with no flags; suggestions appear contextually"
+    dependencies: []
+    labels: ["cli","dx"]
+    estimate: "1.5d"
+
+  - id: U5
+    area: user
+    milestone: M3
+    priority: P3
+    type: feature
+    title: "VS Code extension (skeleton)"
+    objective: "In-editor search and jump-to-line."
+    rationale: "Adoption increases when integrated with workflow."
+    suggested_changes:
+      - "client/vscode/ (new extension skeleton)"
+      - "docs/IDE.md (usage)"
+    steps:
+      - "Implement search panel, list view, open file at anchor"
+    acceptance:
+      - "Local repo search and navigation works via extension"
+    dependencies: ["U1"]
+    labels: ["ide","ux"]
+    estimate: "5d"
+
+  - id: O1
+    area: operator
+    milestone: M1
+    priority: P1
+    type: infra
+    title: "Health checks & container HEALTHCHECK"
+    objective: "Ensure orchestrator can detect unhealthy pods."
+    rationale: "Production readiness."
+    suggested_changes:
+      - "server/app/main.py (/healthz, /readyz)"
+      - "docker-compose.yml (healthcheck for server)"
+    steps:
+      - "Implement /healthz (process) and /readyz (dependencies ping)"
+      - "Add Docker HEALTHCHECK using /healthz"
+    acceptance:
+      - "HEALTHCHECK turns unhealthy on process failure"
+    dependencies: []
+    labels: ["sre","readiness"]
+    estimate: "0.5d"
+
+  - id: O2
+    area: operator
+    milestone: M1
+    priority: P1
+    type: infra
+    title: "Prometheus metrics endpoint and Grafana dashboard"
+    objective: "Observe performance and quality."
+    rationale: "Enable tuning loop and alerting."
+    suggested_changes:
+      - "server/app/metrics.py (prometheus_client)"
+      - "server/app/main.py (expose /metrics)"
+      - "deploy/grafana/dashboard.json (template)"
+    steps:
+      - "Export: requests_total, latency buckets, cache_hits, errors, variant split"
+      - "Add counters for NDCG/MAP sample if available"
+    acceptance:
+      - "Prometheus scrapes /metrics; Grafana shows dashboard"
+    dependencies: ["A6"]
+    labels: ["observability","metrics"]
+    estimate: "1.5d"
+
+  - id: O3
+    area: operator
+    milestone: M2
+    priority: P1
+    type: infra
+    title: "Snapshots & recovery runbook (OS/Qdrant)"
+    objective: "Restore to point-in-time."
+    rationale: "Data protection is essential."
+    suggested_changes:
+      - "server/scripts/os_snapshot.sh (new)"
+      - "server/scripts/qdrant_snapshot.sh (new)"
+      - "docs/Operations.md (recovery procedure)"
+    steps:
+      - "Register OS snapshot repo (MinIO); daily/weekly cron"
+      - "Automate Qdrant snapshot; retention policy"
+      - "Document end-to-end recovery drill"
+    acceptance:
+      - "Restoration tested and documented"
+    dependencies: []
+    labels: ["backup","recovery"]
+    estimate: "2d"
+
+  - id: O4
+    area: operator
+    milestone: M3
+    priority: P2
+    type: infra
+    title: "Index Lifecycle Management (ILM) & log retention"
+    objective: "Keep performance predictable and costs in check."
+    rationale: "Old shards/logs degrade performance."
+    suggested_changes:
+      - "server/scripts/init_opensearch_ilm.py (new)"
+      - "docs/Operations.md (ILM policy)"
+    steps:
+      - "Define rollover size/time for code index and logs"
+      - "Apply ILM to new indices"
+    acceptance:
+      - "Indices roll over and old ones get deleted/archived automatically"
+    dependencies: ["O2"]
+    labels: ["cost","performance"]
+    estimate: "1.5d"
+
+  - id: O5
+    area: operator
+    milestone: M3
+    priority: P2
+    type: feature
+    title: "OIDC/JWT auth, RBAC per tenant, audit log"
+    objective: "Enterprise-grade security & traceability."
+    rationale: "API key JSON is insufficient for production."
+    suggested_changes:
+      - "server/app/security/oidc.py (new)"
+      - "server/app/security/rbac.py (new)"
+      - "server/app/middleware/audit.py (new)"
+      - "docs/Security.md (flows)"
+    steps:
+      - "Integrate IdP (OIDC) for authentication"
+      - "Define roles: reader/indexer/admin"
+      - "Emit audit events for searches/indexing/feedback"
+    acceptance:
+      - "Role-based access enforced; audit trail queryable"
+    dependencies: ["A6"]
+    labels: ["security","audit"]
+    estimate: "4d"
+
+  - id: O7
+    area: operator
+    milestone: M3
+    priority: P2
+    type: infra
+    title: "Alerting & SLOs"
+    objective: "Early detection and response."
+    rationale: "Tie metrics to action."
+    suggested_changes:
+      - "deploy/prometheus/alerts.yml (new)"
+      - "docs/SLO.md (targets and playbooks)"
+    steps:
+      - "Define SLOs: availability, error rate, P95 latency"
+      - "Create Prometheus rules and example PagerDuty/Webhook config"
+    acceptance:
+      - "Alerts fire on threshold breach; playbook followed"
+    dependencies: ["O2"]
+    labels: ["sre","reliability"]
+    estimate: "1d"
+
+  - id: O6
+    area: operator
+    milestone: M3
+    priority: P3
+    type: infra
+    title: "Kubernetes/Helm packaging"
+    objective: "Repeatable, scalable deployments."
+    rationale: "Move from docker-compose to production-grade orchestration."
+    suggested_changes:
+      - "deploy/helm/ (chart for server, qdrant, opensearch, minio, redis, workers)"
+      - "docs/Deploy.md (helm install)"
+    steps:
+      - "Create charts, values, HPA, liveness/readiness, PVCs"
+      - "Pre/post install hooks for indices and buckets"
+    acceptance:
+      - "helm install brings up a functional cluster; scale-out works"
+    dependencies: ["O1","O2","A2","A3"]
+    labels: ["devops","k8s"]
+    estimate: "5d"
