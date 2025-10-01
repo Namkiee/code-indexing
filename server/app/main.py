@@ -5,21 +5,23 @@ from app.models.schemas import UploadRequest, SearchRequest, SearchResponse, Sea
 from app.index.qdrant_store import QdrantStore
 from app.index.opensearch_store import OSStore
 from app.search.hybrid_search import HybridSearch
+from app.search.providers.embedding import build_embedding_provider
+from app.search.providers.reranker import build_reranker_provider
 from app.search.reranker import CrossEncoderReranker
 from app.utils.s3_utils import get_object_text
 from app.utils.vault import get_current_salt
 from app.utils.jsonl import append_jsonl
 from qdrant_client.http.models import PointStruct
-from sentence_transformers import SentenceTransformer
 import time, uuid, threading, json, pathlib, os
 from collections import OrderedDict
 
 app = FastAPI(title="Hybrid Code Indexing (Advanced)")
-embedder = SentenceTransformer(settings.embed_model)
+embed_provider = build_embedding_provider(os.getenv("EMBED_PROVIDER"), settings.embed_model)
 qdrant = QdrantStore()
 os_store = OSStore()
-searcher = HybridSearch(qdrant, os_store, embedder)
-reranker = CrossEncoderReranker(settings.reranker_model)
+searcher = HybridSearch(qdrant, os_store, embed_provider)
+reranker_provider = build_reranker_provider(os.getenv("RERANKER_PROVIDER"), settings.reranker_model)
+reranker = CrossEncoderReranker(provider=reranker_provider)
 
 # --- RBAC / Rate limit / Cache / Metrics ---
 TENANT_KEYS = {}
@@ -57,7 +59,7 @@ EMB_CACHE = EmbedCache(EMBED_CACHE_SIZE)
 def encode_cached(text: str):
     v = EMB_CACHE.get(text)
     if v is not None: return v
-    vec = embedder.encode([text], normalize_embeddings=True)[0]
+    vec = embed_provider.encode([text], normalize_embeddings=True)[0]
     EMB_CACHE.put(text, vec)
     return vec
 
