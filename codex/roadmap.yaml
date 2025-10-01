@@ -89,6 +89,33 @@ tasks:
     labels: ["scaling","cache","limits"]
     estimate: "2d"
 
+  - id: A8
+    area: architecture
+    milestone: M1
+    priority: P1
+    type: refactor
+    title: "지연 로딩 가능한 모델 프로바이더 레지스트리"
+    objective: "환경 변수로 지정한 프로바이더가 없더라도 서비스가 안전하게 기동되고, 확장 가능한 등록 방식을 제공한다."
+    rationale: "현재 구현은 하드코딩된 Hugging Face 프로바이더만 지원하고, 오타나 미등록 키가 있으면 FastAPI 앱이 기동 단계에서 바로 중단된다."
+    suggested_changes:
+      - "server/app/search/providers/__init__.py (프로바이더 레지스트리와 등록 데코레이터 추가)"
+      - "server/app/search/providers/embedding.py (지연 로딩/캐싱 가능한 Provider 구현)"
+      - "server/app/search/providers/reranker.py (CrossEncoder provider도 동일 패턴 적용)"
+      - "server/app/main.py (환경 변수 처리 시 기본값 fallback 및 경고 로깅)"
+      - "docs/ModelProviders.md (확장 방법과 예외 처리 섹션 추가)"
+      - "tests/unit/test_providers.py (레지스트리/지연 로딩 커버리지)"
+    steps:
+      - "Provider 등록/탐색을 위한 경량 레지스트리 구현 (dict 기반)"
+      - "SentenceTransformer/CrossEncoder 로딩을 lazy property로 전환하여 첫 호출에만 다운로드"
+      - "미등록 키 사용 시 기본 프로바이더로 대체하고 경고 로그 남기기"
+      - "커스텀 provider 등록 예제와 테스트 추가"
+    acceptance:
+      - "환경 변수가 잘못되어도 서버는 기본 provider로 기동되며 경고가 로깅된다"
+      - "테스트에서 dummy provider 등록/지연 로딩 동작이 검증된다"
+    dependencies: ["A1"]
+    labels: ["DI","resilience","extensibility"]
+    estimate: "1.5d"
+
   - id: A3
     area: architecture
     milestone: M2
