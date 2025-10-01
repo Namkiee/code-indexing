@@ -3,11 +3,12 @@ from app.index.qdrant_store import QdrantStore
 from app.index.opensearch_store import OSStore
 from app.index.rrf import rrf
 from app.search.learned_ranker import LearnedRanker
+from app.search.providers.embedding import EmbeddingProvider
 from app.config import settings
 import numpy as np
 
 class HybridSearch:
-    def __init__(self, qdrant: QdrantStore, os_store: OSStore, embedder):
+    def __init__(self, qdrant: QdrantStore, os_store: OSStore, embedder: EmbeddingProvider):
         self.qdrant = qdrant
         self.os = os_store
         self.embedder = embedder

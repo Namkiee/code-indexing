@@ -22,3 +22,4 @@ tree_sitter_languages==1.10.2
 joblib==1.4.2
 boto3==1.35.28
 tuspy==1.0.3
+pytest==8.3.3
