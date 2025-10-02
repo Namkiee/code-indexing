@@ -6,6 +6,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
@@ -97,13 +99,32 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
+        except HTTPException as exc:
+            duration_ms = int((time.time() - start) * 1000)
+            self._logger.warning(
+                "request_failed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": exc.status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+            response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            for header_name, header_value in (exc.headers or {}).items():
+                response.headers[header_name] = header_value
         except Exception:
             duration_ms = int((time.time() - start) * 1000)
             self._logger.exception(
                 "request_failed",
-                extra={"method": request.method, "path": request.url.path, "duration_ms": duration_ms},
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": 500,
+                    "duration_ms": duration_ms,
+                },
             )
-            raise
+            response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
         else:
             duration_ms = int((time.time() - start) * 1000)
             self._logger.info(
@@ -115,7 +136,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                     "duration_ms": duration_ms,
                 },
             )
-            response.headers[self.header_name] = request_id
-            return response
         finally:
             REQUEST_ID_CTX.reset(token)
+
+        response.headers[self.header_name] = request_id
+        return response

@@ -178,31 +178,36 @@ async def search(req: SearchRequest, request: Request, x_api_key: str | None = H
     require_key(req.tenant_id, x_api_key); key = x_api_key or request.client.host
     # Rate limit
     now_min = int(time.time()//60)
-    ipkey = f"{key}:{now_min}"; 
+    ipkey = f"{key}:{now_min}";
     # reuse check_rate via simple inline
     hit = getattr(search, "_rate", {}); cnt = hit.get(ipkey,0)+1
     if cnt > int(os.getenv("LIMIT_SEARCH_PER_MINUTE","120")): raise HTTPException(429, "rate limit exceeded")
     hit[ipkey]=cnt; setattr(search, "_rate", hit)
 
     t0 = time.time()
+    logger.info(
+        "search_started",
+        extra={
+            "tenant_id": req.tenant_id,
+            "repo_id": req.repo_id,
+            "query": req.query,
+            "lang": req.lang,
+            "top_k": req.top_k,
+        },
+    )
+
     cache_key=(req.tenant_id, req.repo_id, req.query, req.lang, req.dir_hint, req.exclude_tests, req.top_k)
     cached_entry = getattr(search, "_cache", {}).get(cache_key)
     cache_valid = (
         cached_entry is not None
         and (time.time()-cached_entry["t"])<=int(os.getenv("SEARCH_CACHE_TTL_S","30"))
     )
-    logger.info(
-        "search_request",
-        extra={
-            "tenant_id": req.tenant_id,
-            "repo_id": req.repo_id,
-            "lang": req.lang,
-            "top_k": req.top_k,
-            "cache_hit": cache_valid,
-        },
-    )
+
     if cache_valid:
-        hits = cached_entry["hits"]; debug=[]
+        hits = cached_entry["hits"]
+        debug = cached_entry.get("debug", [])
+        sid = cached_entry.get("search_id", uuid.uuid4().hex[:16])
+        bucket = cached_entry.get("bucket", "control")
     else:
         # A/B bucket
         sid = uuid.uuid4().hex[:16]
@@ -214,16 +219,42 @@ async def search(req: SearchRequest, request: Request, x_api_key: str | None = H
         hits, debug = searcher.search_with_debug(tenant_id=req.tenant_id, repo_id=req.repo_id, query=req.query, top_k=req.top_k,
                                                  filters={"lang": req.lang, "dir_hint": req.dir_hint, "exclude_tests": req.exclude_tests})
         searcher.alpha, searcher.beta = orig
-        setattr(search, "_last_bucket", bucket)
-        setattr(search, "_last_sid", sid)
         # store to cache
-        c = getattr(search, "_cache", {}); c[cache_key]={"t": time.time(), "hits": hits}; setattr(search, "_cache", c)
+        c = getattr(search, "_cache", {})
+        c[cache_key]={"t": time.time(), "hits": hits, "bucket": bucket, "search_id": sid, "debug": debug}
+        setattr(search, "_cache", c)
 
     need_fetch = (req.repo_id in settings.privacy_repo_ids)
-    sid = getattr(search, "_last_sid", uuid.uuid4().hex[:16])
-    bucket = getattr(search, "_last_bucket", "control")
     append_jsonl("/app/server/data/search_log.jsonl", {"search_id": sid, "tenant_id": req.tenant_id, "repo_id": req.repo_id,
                                                        "query": req.query, "timestamp": time.time(), "candidates": debug, "bucket": bucket})
+    duration_ms = int((time.time()-t0)*1000)
+    logger.info(
+        "search_completed",
+        extra={
+            "tenant_id": req.tenant_id,
+            "repo_id": req.repo_id,
+            "query": req.query,
+            "top_k": req.top_k,
+            "cache_hit": cache_valid,
+            "variant": bucket,
+            "duration_ms": duration_ms,
+            "result_count": len(hits),
+            "search_id": sid,
+        },
+    )
+    if debug:
+        logger.debug(
+            "search_candidates",
+            extra={
+                "tenant_id": req.tenant_id,
+                "repo_id": req.repo_id,
+                "query": req.query,
+                "variant": bucket,
+                "cache_hit": cache_valid,
+                "search_id": sid,
+                "candidates": debug,
+            },
+        )
     with _stats_lock:
         STATS["search_total"] += 1
         STATS["avg_search_ms"] = (STATS["avg_search_ms"]*0.99 + (time.time()-t0)*1000*0.01)
