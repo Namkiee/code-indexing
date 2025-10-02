@@ -3,7 +3,7 @@ import logging
 import pathlib
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[2] / "server"))
@@ -18,6 +18,14 @@ def build_app():
     @app.get("/echo")
     def echo():
         return {"request_id": REQUEST_ID_CTX.get()}
+
+    @app.get("/fail-http")
+    def fail_http():
+        raise HTTPException(status_code=418, detail="teapot")
+
+    @app.get("/fail-unhandled")
+    def fail_unhandled():
+        raise RuntimeError("boom")
 
     return app
 
@@ -64,3 +72,27 @@ def test_structured_logging_includes_request_id(capfd):
     assert payload["message"] == "hello"
     assert payload["foo"] == "bar"
     assert payload["request_id"] == "req-123"
+
+
+def test_request_id_is_attached_to_http_error():
+    app = build_app()
+    client = TestClient(app)
+
+    response = client.get("/fail-http", headers={"X-Request-ID": "err-req"})
+
+    assert response.status_code == 418
+    assert response.headers["X-Request-ID"] == "err-req"
+    assert response.json() == {"detail": "teapot"}
+
+
+def test_request_id_is_attached_to_unhandled_error():
+    app = build_app()
+    client = TestClient(app)
+
+    response = client.get("/fail-unhandled")
+
+    assert response.status_code == 500
+    generated_id = response.headers["X-Request-ID"]
+    assert isinstance(generated_id, str)
+    assert len(generated_id) == 32
+    assert response.json() == {"detail": "Internal Server Error"}

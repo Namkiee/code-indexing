@@ -65,6 +65,7 @@ tasks:
     dependencies: []
     labels: ["observability"]
     estimate: "1.5d"
+    status: completed
 
   - id: A2
     area: architecture
