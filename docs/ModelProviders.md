@@ -1,6 +1,6 @@
 # Model Provider Abstractions
 
-The search service now uses dependency-injected providers for both embedding and cross-encoder reranking models. This pattern makes it easy to swap model implementations and improves testability.
+The search service now uses dependency-injected providers for both embedding and cross-encoder reranking models. This pattern makes it easy to swap model implementations, improves testability, and now offers graceful fallbacks when configuration is incorrect.
 
 ## Embedding providers
 
@@ -8,7 +8,9 @@ The search service now uses dependency-injected providers for both embedding and
 * **Default:** `huggingface`
 * **Implementation:** `HFEmbeddingProvider` wraps a Hugging Face `SentenceTransformer` model specified by `settings.embed_model`.
 
-When `HybridSearch` needs embeddings, it calls the provider interface instead of constructing a model directly. Implement custom providers by subclassing `EmbeddingProvider` in `server/app/search/providers/embedding.py` and implementing `encode`.
+Providers are looked up through a lightweight registry (`register_embedding_provider`) that supports aliases and lazy loading. The Hugging Face models are instantiated only when `encode` is first called, so startup stays fast even if large checkpoints are in use.
+
+If `EMBED_PROVIDER` is unset or references an unknown key, the application falls back to the default Hugging Face provider and emits a warning log indicating the bad value.
 
 ## Reranker providers
 
@@ -16,13 +18,13 @@ When `HybridSearch` needs embeddings, it calls the provider interface instead of
 * **Default:** `huggingface`
 * **Implementation:** `HFCrossEncoderProvider` wraps the Hugging Face `CrossEncoder` referenced by `settings.reranker_model`.
 
-The `/v1/search/fetch-lines` endpoint uses a provider-backed `CrossEncoderReranker`, enabling A/B testing or vendor changes without code edits.
+Rerankers share the same registry pattern via `register_reranker_provider`, including lazy model instantiation and fallback logging.
 
 ## Adding a new provider
 
 1. Create a subclass of the relevant abstract base class (`EmbeddingProvider` or `CrossEncoderProvider`).
-2. Register it in the corresponding `build_*_provider` factory.
+2. Register it with a unique key (and optional aliases) using `register_embedding_provider("my-key")` or `register_reranker_provider("my-key")`. Factories receive the configured model name.
 3. Set the environment variable to the new provider key.
 4. (Optional) Extend the unit tests under `tests/unit/test_providers.py` to cover the new provider.
 
-This design keeps provider wiring in `server/app/main.py` and isolates vendor-specific logic, simplifying configuration-driven model swaps.
+This design keeps provider wiring in `server/app/main.py`, isolates vendor-specific logic, and ensures the service continues to boot with sensible defaults even when configuration contains typos.

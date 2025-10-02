@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Sequence
+from threading import Lock
+from typing import Callable, Iterable, Sequence, Tuple
 
 from sentence_transformers import SentenceTransformer
+
+from .registry import ProviderRegistry
 
 
 class EmbeddingProvider(ABC):
@@ -23,8 +26,22 @@ class EmbeddingProvider(ABC):
 class HFEmbeddingProvider(EmbeddingProvider):
     """Embedding provider backed by Hugging Face SentenceTransformers."""
 
-    def __init__(self, model_name: str):
-        self._model = SentenceTransformer(model_name)
+    def __init__(
+        self,
+        model_name: str,
+        loader: Callable[[str], SentenceTransformer] | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._loader = loader or SentenceTransformer
+        self._model: SentenceTransformer | None = None
+        self._lock = Lock()
+
+    def _get_model(self) -> SentenceTransformer:
+        if self._model is None:
+            with self._lock:
+                if self._model is None:
+                    self._model = self._loader(self._model_name)
+        return self._model
 
     def encode(
         self,
@@ -36,16 +53,42 @@ class HFEmbeddingProvider(EmbeddingProvider):
             batch: Iterable[str] = [texts]
         else:
             batch = texts
-        vectors = self._model.encode(batch, normalize_embeddings=normalize_embeddings)
+        model = self._get_model()
+        vectors = model.encode(batch, normalize_embeddings=normalize_embeddings)
         if hasattr(vectors, "tolist"):
             return vectors.tolist()
         return list(vectors)
 
 
-def build_embedding_provider(provider: str | None, model_name: str) -> EmbeddingProvider:
-    """Factory for embedding providers based on configuration."""
+_embedding_registry: ProviderRegistry[EmbeddingProvider] = ProviderRegistry("huggingface")
 
-    provider_key = (provider or "huggingface").strip().lower()
-    if provider_key in {"hf", "huggingface", "sentence-transformers"}:
-        return HFEmbeddingProvider(model_name)
-    raise ValueError(f"Unsupported embedding provider: {provider}")
+
+def register_embedding_provider(
+    key: str,
+    *,
+    aliases: Sequence[str] | None = None,
+):
+    """Public decorator for registering embedding providers."""
+
+    return _embedding_registry.register(key, aliases=aliases)
+
+
+@register_embedding_provider(
+    "huggingface",
+    aliases=("hf", "sentence-transformers"),
+)
+def _build_hf_embedding_provider(model_name: str) -> EmbeddingProvider:
+    return HFEmbeddingProvider(model_name)
+
+
+def build_embedding_provider(
+    provider: str | None,
+    model_name: str,
+) -> Tuple[EmbeddingProvider, str, str | None]:
+    """Factory for embedding providers based on configuration.
+
+    Returns a tuple of ``(provider, resolved_key, fallback_from)`` to allow
+    callers to log when a fallback occurs.
+    """
+
+    return _embedding_registry.create(provider, model_name)
