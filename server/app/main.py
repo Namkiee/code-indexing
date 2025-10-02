@@ -23,13 +23,17 @@ from app.search.providers.embedding import build_embedding_provider
 from app.search.providers.reranker import build_reranker_provider
 from app.search.reranker import CrossEncoderReranker
 from app.utils.jsonl import append_jsonl
+from app.utils.logging import RequestIdMiddleware, configure_logging
 from app.utils.s3_utils import get_object_text
 from app.utils.vault import get_current_salt
 from qdrant_client.http.models import PointStruct
 
+configure_logging()
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Hybrid Code Indexing (Advanced)")
+app.add_middleware(RequestIdMiddleware)
 
 embed_provider, embed_provider_key, embed_fallback = build_embedding_provider(
     os.getenv("EMBED_PROVIDER"), settings.embed_model
@@ -182,9 +186,23 @@ async def search(req: SearchRequest, request: Request, x_api_key: str | None = H
 
     t0 = time.time()
     cache_key=(req.tenant_id, req.repo_id, req.query, req.lang, req.dir_hint, req.exclude_tests, req.top_k)
-    cached = getattr(search, "_cache", {}).get(cache_key)
-    if cached and (time.time()-cached["t"])<=int(os.getenv("SEARCH_CACHE_TTL_S","30")):
-        hits = cached["hits"]; debug=[]
+    cached_entry = getattr(search, "_cache", {}).get(cache_key)
+    cache_valid = (
+        cached_entry is not None
+        and (time.time()-cached_entry["t"])<=int(os.getenv("SEARCH_CACHE_TTL_S","30"))
+    )
+    logger.info(
+        "search_request",
+        extra={
+            "tenant_id": req.tenant_id,
+            "repo_id": req.repo_id,
+            "lang": req.lang,
+            "top_k": req.top_k,
+            "cache_hit": cache_valid,
+        },
+    )
+    if cache_valid:
+        hits = cached_entry["hits"]; debug=[]
     else:
         # A/B bucket
         sid = uuid.uuid4().hex[:16]
