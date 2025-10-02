@@ -51,6 +51,10 @@ services:
     depends_on: [minio, mc]
     ports: ["1080:1080"]
 
+  redis:
+    image: redis:7.4-alpine
+    ports: ["6379:6379"]
+
   server:
     build: ./server
     environment:
@@ -67,8 +71,10 @@ services:
       - REQUIRE_API_KEY=false
       - LIMIT_SEARCH_PER_MINUTE=120
       - EMBED_CACHE_SIZE=10000
+      - EMBED_CACHE_TTL_S=3600
       - SEARCH_CACHE_TTL_S=30
-    depends_on: [qdrant, opensearch, minio, tusd]
+      - REDIS_URL=redis://redis:6379/0
+    depends_on: [qdrant, opensearch, minio, tusd, redis]
     ports: ["8000:8000"]
 
 volumes:
