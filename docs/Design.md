@@ -6,3 +6,4 @@
 - 필터: lang / dir_hint / exclude_tests
 - Incremental 인덱싱(blake3), tus 이어올리기
 - RBAC(x-api-key), rate-limit, 임베딩/검색 캐시, /v1/metrics, A/B bucket
+- FastAPI 진입점은 `app.api` 패키지의 라우터와 `app.services` 계층으로 모듈화되어 있으며, 라우터는 `AppContext`를 통해 캐시·레이트리밋·검색기 등을 주입 받아 테스트와 향후 Redis 교체가 용이하다.
