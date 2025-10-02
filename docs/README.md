@@ -8,6 +8,7 @@
 - Tus Upload
 - API
 - Operations
+- Logging & Request Tracing
 - Model Provider Abstractions
 - Troubleshooting
 - Changelog
