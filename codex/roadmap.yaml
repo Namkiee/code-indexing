@@ -487,3 +487,49 @@ tasks:
     labels: ["maintainability","refactor"]
     estimate: "2d"
     status: completed
+
+  - id: A10
+    area: architecture
+    milestone: M1
+    priority: P1
+    type: bugfix
+    title: "검색 변형 실패 후 기본 가중치 복원"
+    objective: "A/B 변형 실행 중 예외가 발생하더라도 기본 검색 가중치가 유지되도록 한다."
+    rationale: "현재 변형 실행 중 예외가 발생하면 `HybridSearch`의 alpha/beta 값이 원복되지 않아 이후 요청이 잘못된 가중치를 사용한다."
+    suggested_changes:
+      - "server/app/api/routes/search.py (변형 가중치 조정에 `try`/`finally` 적용)"
+      - "tests/unit/test_search_variant.py (실패 후 가중치 복원을 검증하는 단위 테스트 추가)"
+    steps:
+      - "변형 가중치 적용 구간을 `try`/`finally`로 감싸 항상 기본 값을 복원"
+      - "예외를 던지는 스텁 검색기를 사용해 가중치가 복원되는지 테스트"
+    acceptance:
+      - "예외 발생 후에도 `HybridSearch` 기본 가중치가 유지된다"
+      - "단위 테스트가 실패 시나리오에서 복원을 검증한다"
+    dependencies: []
+    labels: ["search","reliability"]
+    estimate: "0.5d"
+    status: not_started
+
+  - id: A11
+    area: architecture
+    milestone: M1
+    priority: P1
+    type: bugfix
+    title: "오류 응답 JSON에 요청 ID와 코드 포함"
+    objective: "클라이언트가 오류를 추적할 수 있도록 표준화된 메타데이터를 JSON 응답에 포함한다."
+    rationale: "`RequestIdMiddleware`가 헤더에만 요청 ID를 포함해 JSON 본문에서는 약속한 정보가 누락되어 있다."
+    suggested_changes:
+      - "server/app/utils/logging.py (오류 응답 JSON에 `request_id`, `code` 필드 추가)"
+      - "tests/unit/test_logging.py (HTTP/예상치 못한 예외에 대한 JSON 메타데이터 검증)"
+      - "docs/Troubleshooting.md (갱신된 오류 스키마 문서화)"
+    steps:
+      - "HTTPException과 일반 예외 처리에서 요청 ID와 오류 코드를 JSON 본문에 포함"
+      - "단위 테스트로 필드가 항상 채워지는지 검증"
+      - "클라이언트 가이드를 업데이트해 새로운 필드를 설명"
+    acceptance:
+      - "오류 응답 JSON이 `request_id`와 `code` 필드를 항상 포함한다"
+      - "문서가 새로운 오류 포맷을 안내한다"
+    dependencies: ["A6"]
+    labels: ["observability","ux"]
+    estimate: "0.5d"
+    status: not_started
