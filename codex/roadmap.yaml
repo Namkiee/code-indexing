@@ -90,6 +90,7 @@ tasks:
     dependencies: ["A6"]
     labels: ["scaling","cache","limits"]
     estimate: "2d"
+    status: not_started
 
   - id: A8
     area: architecture
@@ -351,6 +352,7 @@ tasks:
     dependencies: ["A6"]
     labels: ["observability","metrics"]
     estimate: "1.5d"
+    status: not_started
 
   - id: O3
     area: operator
@@ -373,6 +375,7 @@ tasks:
     dependencies: []
     labels: ["backup","recovery"]
     estimate: "2d"
+    status: not_started
 
   - id: O4
     area: operator
@@ -393,6 +396,7 @@ tasks:
     dependencies: ["O2"]
     labels: ["cost","performance"]
     estimate: "1.5d"
+    status: not_started
 
   - id: O5
     area: operator
@@ -416,6 +420,7 @@ tasks:
     dependencies: ["A6"]
     labels: ["security","audit"]
     estimate: "4d"
+    status: not_started
 
   - id: O7
     area: operator
@@ -436,6 +441,7 @@ tasks:
     dependencies: ["O2"]
     labels: ["sre","reliability"]
     estimate: "1d"
+    status: not_started
 
   - id: O6
     area: operator
@@ -456,3 +462,28 @@ tasks:
     dependencies: ["O1","O2","A2","A3"]
     labels: ["devops","k8s"]
     estimate: "5d"
+    status: not_started
+
+  - id: A9
+    area: architecture
+    milestone: M1
+    priority: P2
+    type: refactor
+    title: "FastAPI 진입점 모듈화 및 글로벌 상태 정리"
+    objective: "`server/app/main.py`에 집중된 글로벌 캐시/레이트리밋 로직을 모듈로 분리해 Redis 도입과 테스트 작성이 쉬운 구조를 만든다."
+    rationale: "현재 FastAPI 앱 구성, 캐시, 레이트리밋, AB 테스트 로직이 하나의 파일에 얽혀 있어 재사용과 단위 테스트가 어렵다."
+    suggested_changes:
+      - "server/app/api/__init__.py 및 router 모듈 생성"
+      - "server/app/services/cache.py, rate_limit.py 등으로 상태ful 로직 이동"
+      - "tests/unit/ 하위에 모듈화된 서비스 테스트 추가"
+    steps:
+      - "Request/response 모델과 의존성 주입을 위해 FastAPI `APIRouter` 기반 구조 도입"
+      - "임시 전역 dict 대신 인터페이스화된 캐시/레이트리밋 어댑터 작성"
+      - "환경 변수 기반 설정을 `settings` 혹은 `config` 객체를 통해 주입"
+    acceptance:
+      - "주요 엔드포인트가 router 모듈로 분리되고 단위 테스트로 검증된다"
+      - "Redis 도입(A2)의 진입점에서 글로벌 변수를 직접 수정하지 않는다"
+    dependencies: ["A1","A8"]
+    labels: ["maintainability","refactor"]
+    estimate: "2d"
+    status: completed
