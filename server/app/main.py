@@ -1,5 +1,4 @@
 """FastAPI application entrypoint."""
-
 from __future__ import annotations
 
 import json
@@ -22,6 +21,7 @@ from app.services.api_key import APIKeyValidator
 from app.services.cache import EmbeddingCache, SearchCache
 from app.services.metrics import StatsTracker
 from app.services.rate_limit import RateLimiter
+from app.utils.redis_client import create_redis_client
 from app.utils.logging import RequestIdMiddleware, configure_logging
 
 configure_logging()
@@ -31,7 +31,9 @@ TENANT_FILE = pathlib.Path("/app/server/data/tenants.json")
 REQUIRE_API_KEY = os.getenv("REQUIRE_API_KEY", "false").lower() == "true"
 SEARCH_RATE_PER_MIN = int(os.getenv("LIMIT_SEARCH_PER_MINUTE", "120"))
 EMBED_CACHE_SIZE = int(os.getenv("EMBED_CACHE_SIZE", "10000"))
+EMBED_CACHE_TTL_S = int(os.getenv("EMBED_CACHE_TTL_S", "3600"))
 SEARCH_CACHE_TTL_S = int(os.getenv("SEARCH_CACHE_TTL_S", "30"))
+REDIS_URL = os.getenv("REDIS_URL")
 
 
 def _load_tenant_keys(path: pathlib.Path) -> dict[str, list[str]]:
@@ -76,6 +78,8 @@ def create_app() -> FastAPI:
     qdrant = QdrantStore()
     opensearch = OSStore()
 
+    redis_client = create_redis_client(REDIS_URL)
+
     searcher = HybridSearch(qdrant, opensearch, embed_provider)
     reranker = CrossEncoderReranker(provider=reranker_provider)
 
@@ -84,9 +88,20 @@ def create_app() -> FastAPI:
         opensearch=opensearch,
         searcher=searcher,
         reranker=reranker,
-        embedding_cache=EmbeddingCache(embed_provider, EMBED_CACHE_SIZE),
-        search_cache=SearchCache(SEARCH_CACHE_TTL_S),
-        rate_limiter=RateLimiter(SEARCH_RATE_PER_MIN),
+        embedding_cache=EmbeddingCache(
+            embed_provider,
+            EMBED_CACHE_SIZE,
+            redis_client=redis_client,
+            ttl_seconds=EMBED_CACHE_TTL_S,
+        ),
+        search_cache=SearchCache(
+            SEARCH_CACHE_TTL_S,
+            redis_client=redis_client,
+        ),
+        rate_limiter=RateLimiter(
+            SEARCH_RATE_PER_MIN,
+            redis_client=redis_client,
+        ),
         api_keys=APIKeyValidator(_load_tenant_keys(TENANT_FILE), REQUIRE_API_KEY),
         stats=StatsTracker(),
     )
