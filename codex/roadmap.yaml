@@ -90,7 +90,9 @@ tasks:
     dependencies: ["A6"]
     labels: ["scaling","cache","limits"]
     estimate: "2d"
-    status: not_started
+    status: completed
+    completed_at: "2024-04-26"
+    notes: "Redis cache, shared rate limiting, and fallback handling are live in server/app and docs."
 
   - id: A8
     area: architecture
