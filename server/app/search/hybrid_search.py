@@ -24,13 +24,26 @@ class HybridSearch:
         if hi - lo < 1e-9: return [0.5 for _ in scores]
         return ((arr - lo) / (hi - lo)).tolist()
 
-    def search_with_debug(self, tenant_id: str, repo_id: str, query: str, top_k: int | None = None, filters: dict | None = None):
+    def search_with_debug(
+        self,
+        tenant_id: str,
+        repo_id: str,
+        query: str,
+        top_k: int | None = None,
+        filters: dict | None = None,
+        *,
+        alpha: float | None = None,
+        beta: float | None = None,
+    ):
         top_k = top_k or settings.final_k
         qvec = self.embedder.encode([query], normalize_embeddings=True)[0]
         lang = (filters or {}).get('lang')
         dir_hint = (filters or {}).get('dir_hint')
         exclude_tests = bool((filters or {}).get('exclude_tests'))
         hnsw_ef = max(64, int((settings.top_k_vector or 50)*2))
+
+        alpha_weight = self.alpha if alpha is None else alpha
+        beta_weight = self.beta if beta is None else beta
 
         v_hits = self.qdrant.search_tenant(tenant_id, qvec, repo_id=repo_id, top_k=settings.top_k_vector,
                                            lang=lang, dir_hint=dir_hint, exclude_tests=exclude_tests, hnsw_ef=hnsw_ef)
@@ -53,7 +66,7 @@ class HybridSearch:
         id_list = list(ids)
         vnorm = self._normalize([vdict.get(cid, 0.0) for cid in id_list])
         bnorm = self._normalize([bdict.get(cid, 0.0) for cid in id_list])
-        fused = {cid: self.alpha*vnorm[i] + self.beta*bnorm[i] for i,cid in enumerate(id_list)}
+        fused = {cid: alpha_weight*vnorm[i] + beta_weight*bnorm[i] for i,cid in enumerate(id_list)}
         if not fused:
             fused = dict(rrf([v_pairs, b_pairs])) if b_pairs else dict(rrf([v_pairs]))
 
