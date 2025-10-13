@@ -73,10 +73,11 @@ async def search(
         search_id = uuid.uuid4().hex[:16]
         bucket = "control" if int(search_id[-1], 16) % 2 == 0 else "variant"
 
-        original_alpha, original_beta = context.searcher.alpha, context.searcher.beta
+        alpha_override: float | None = None
+        beta_override: float | None = None
         if bucket == "variant":
-            context.searcher.alpha = float(os.getenv("AB_VARIANT_ALPHA", context.searcher.alpha))
-            context.searcher.beta = float(os.getenv("AB_VARIANT_BETA", context.searcher.beta))
+            alpha_override = float(os.getenv("AB_VARIANT_ALPHA", context.searcher.alpha))
+            beta_override = float(os.getenv("AB_VARIANT_BETA", context.searcher.beta))
 
         hits, debug = context.searcher.search_with_debug(
             tenant_id=req.tenant_id,
@@ -88,8 +89,9 @@ async def search(
                 "dir_hint": req.dir_hint,
                 "exclude_tests": req.exclude_tests,
             },
+            alpha=alpha_override,
+            beta=beta_override,
         )
-        context.searcher.alpha, context.searcher.beta = original_alpha, original_beta
 
         context.search_cache.set(
             cache_key,
