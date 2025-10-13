@@ -75,23 +75,39 @@ async def search(
 
         alpha_override: float | None = None
         beta_override: float | None = None
-        if bucket == "variant":
-            alpha_override = float(os.getenv("AB_VARIANT_ALPHA", context.searcher.alpha))
-            beta_override = float(os.getenv("AB_VARIANT_BETA", context.searcher.beta))
+        original_alpha: float | None = None
+        original_beta: float | None = None
+        should_restore = False
 
-        hits, debug = context.searcher.search_with_debug(
-            tenant_id=req.tenant_id,
-            repo_id=req.repo_id,
-            query=req.query,
-            top_k=req.top_k,
-            filters={
-                "lang": req.lang,
-                "dir_hint": req.dir_hint,
-                "exclude_tests": req.exclude_tests,
-            },
-            alpha=alpha_override,
-            beta=beta_override,
-        )
+        if bucket == "variant":
+            original_alpha = context.searcher.alpha
+            original_beta = context.searcher.beta
+            alpha_override = float(os.getenv("AB_VARIANT_ALPHA", original_alpha))
+            beta_override = float(os.getenv("AB_VARIANT_BETA", original_beta))
+
+            # Temporarily adjust the search weights for the variant bucket.
+            context.searcher.alpha = alpha_override
+            context.searcher.beta = beta_override
+            should_restore = True
+
+        try:
+            hits, debug = context.searcher.search_with_debug(
+                tenant_id=req.tenant_id,
+                repo_id=req.repo_id,
+                query=req.query,
+                top_k=req.top_k,
+                filters={
+                    "lang": req.lang,
+                    "dir_hint": req.dir_hint,
+                    "exclude_tests": req.exclude_tests,
+                },
+                alpha=alpha_override,
+                beta=beta_override,
+            )
+        finally:
+            if should_restore and original_alpha is not None and original_beta is not None:
+                context.searcher.alpha = original_alpha
+                context.searcher.beta = original_beta
 
         context.search_cache.set(
             cache_key,
